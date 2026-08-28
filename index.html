@@ -406,9 +406,13 @@
   <div class="panel" id="panel-feed">
     <h3>🍼 กินนม</h3>
     <div class="field-row">
-      <div class="field" style="max-width:180px;">
-        <label>เวลา</label>
+      <div class="field" style="max-width:150px;">
+        <label>เวลาเริ่ม</label>
         <input type="time" id="feed-time">
+      </div>
+      <div class="field" style="max-width:150px;">
+        <label>เวลาสิ้นสุด (ไม่บังคับ)</label>
+        <input type="time" id="feed-end-time">
       </div>
       <div class="field">
         <label>วิธีให้นม</label>
@@ -443,11 +447,15 @@
   <div class="panel" id="panel-pump">
     <h3>🥛 ปั๊มนม</h3>
     <div class="field-row">
-      <div class="field" style="max-width:180px;">
-        <label>เวลา</label>
+      <div class="field" style="max-width:150px;">
+        <label>เวลาเริ่ม</label>
         <input type="time" id="pump-time">
       </div>
-      <div class="field" style="max-width:180px;">
+      <div class="field" style="max-width:150px;">
+        <label>เวลาสิ้นสุด (ไม่บังคับ)</label>
+        <input type="time" id="pump-end-time">
+      </div>
+      <div class="field" style="max-width:150px;">
         <label>ปริมาณ (ออนซ์)</label>
         <input type="number" min="0" step="0.25" id="pump-amount" placeholder="เช่น 4">
       </div>
@@ -584,6 +592,7 @@
   <div class="chart-grid">
     <div class="chart-card"><h4>ปริมาณนมรวมต่อวัน (ออนซ์)</h4><canvas id="chartFeed" height="180"></canvas></div>
     <div class="chart-card"><h4>จำนวนครั้งเปลี่ยนผ้าอ้อมต่อวัน</h4><canvas id="chartDiaper" height="180"></canvas></div>
+    <div class="chart-card" style="grid-column:1 / -1;"><h4>ระยะเวลาเฉลี่ยต่อครั้งในการกินนม (นาที) — เข้าเต้า vs ขวดนม</h4><canvas id="chartDuration" height="140"></canvas></div>
   </div>
 
   <div class="section-title"><h2>ประวัติวัคซีน</h2></div>
@@ -618,7 +627,7 @@ let entries = [];
 let selectedDate = new Date();
 let activePanel = null;
 let editingId = null;
-let feedChart = null, diaperChart = null;
+let feedChart = null, diaperChart = null, durationChart = null;
 let syncEnabled = false;
 let fbCollectionRef = null;
 let fbUnsubscribe = null;
@@ -774,6 +783,8 @@ function openPanel(type){
   const t = now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
   const timeInput = document.getElementById(type+'-time');
   if(timeInput) timeInput.value = t;
+  const endTimeInput = document.getElementById(type+'-end-time');
+  if(endTimeInput) endTimeInput.value = '';
   clearPhotoPreview(type);
   activePanel = type;
 }
@@ -833,10 +844,12 @@ function editEntry(id){
     setSeg('feed-kind', e.feedKind);
     document.getElementById('feed-amount').value = e.amount!=null ? ozStr(e.amount) : '';
     document.getElementById('feed-note').value = e.note||'';
+    document.getElementById('feed-end-time').value = e.endTime ? fmtTime(e.endTime) : '';
   } else if(e.type==='pump'){
     document.getElementById('pump-amount').value = ozStr(e.amount||0);
     setSeg('pump-side', e.side);
     document.getElementById('pump-note').value = e.note||'';
+    document.getElementById('pump-end-time').value = e.endTime ? fmtTime(e.endTime) : '';
   } else if(e.type==='vaccine'){
     document.getElementById('vaccine-name').value = e.vaccineName||'';
     document.getElementById('vaccine-dose').value = e.dose!=null ? e.dose : '';
@@ -955,6 +968,16 @@ function timeToISO(timeStr, baseDate){
   return d.toISOString();
 }
 
+function endTimeToISO(endTimeStr, startIso){
+  if(!endTimeStr) return null;
+  const start = new Date(startIso);
+  const [h,m] = endTimeStr.split(':').map(Number);
+  const end = new Date(start);
+  end.setHours(h, m, 0, 0);
+  if(end.getTime() <= start.getTime()) end.setDate(end.getDate()+1); // session crossed midnight
+  return end.toISOString();
+}
+
 async function saveEntry(type){
   const timeVal = document.getElementById(type+'-time').value;
   if(!timeVal){ showToast('กรุณาระบุเวลา'); return; }
@@ -972,11 +995,13 @@ async function saveEntry(type){
     const amt = document.getElementById('feed-amount').value;
     entry.amount = amt ? ozToMl(Number(amt)) : null;
     entry.note = document.getElementById('feed-note').value.trim();
+    entry.endTime = endTimeToISO(document.getElementById('feed-end-time').value, iso);
   } else if(type==='pump'){
     const amt = document.getElementById('pump-amount').value;
     entry.amount = amt ? ozToMl(Number(amt)) : 0;
     entry.side = segValue('pump-side');
     entry.note = document.getElementById('pump-note').value.trim();
+    entry.endTime = endTimeToISO(document.getElementById('pump-end-time').value, iso);
   } else if(type==='vaccine'){
     const name = document.getElementById('vaccine-name').value.trim();
     if(!name){ showToast('กรุณาระบุชื่อวัคซีน'); return; }
@@ -1012,7 +1037,7 @@ async function saveEntry(type){
     await persist();
   }
   clearPhotoPreview(type);
-  ['diaper-note','bath-note','feed-note','feed-amount','pump-note','pump-amount',
+  ['diaper-note','bath-note','feed-note','feed-amount','feed-end-time','pump-note','pump-amount','pump-end-time',
    'vaccine-name','vaccine-dose','vaccine-location','vaccine-note','symptom-temp','symptom-note'].forEach(id=>{
     const el = document.getElementById(id); if(el) el.value='';
   });
@@ -1039,6 +1064,11 @@ async function deleteEntry(id){
   render();
 }
 
+function durationMin(e){
+  if(!e.endTime) return null;
+  return Math.round((new Date(e.endTime) - new Date(e.time)) / 60000);
+}
+
 function typeLabel(e){
   if(e.type==='diaper'){
     const k = e.diaperKind==='pee' ? 'เปลี่ยนผ้าอ้อม (ฉี่)' : e.diaperKind==='poop' ? 'เปลี่ยนผ้าอ้อม (อึ)' : 'เปลี่ยนผ้าอ้อม (ฉี่+อึ)';
@@ -1047,11 +1077,13 @@ function typeLabel(e){
   if(e.type==='bath') return 'อาบน้ำ';
   if(e.type==='feed'){
     const kind = e.feedKind==='breast' ? 'เข้าเต้า' : 'ขวดนม';
-    return 'กินนม ('+kind+')'+(e.amount?` — ${ozStr(e.amount)} ออนซ์`:'');
+    const dur = durationMin(e);
+    return 'กินนม ('+kind+')'+(e.amount?` — ${ozStr(e.amount)} ออนซ์`:'')+(dur!=null?` — ${dur} นาที`:'');
   }
   if(e.type==='pump'){
     const sideMap = {left:'ข้างซ้าย', right:'ข้างขวา', both:'สองข้าง'};
-    return 'ปั๊มนม'+(e.side?` (${sideMap[e.side]})`:'')+` — ${ozStr(e.amount||0)} ออนซ์`;
+    const dur = durationMin(e);
+    return 'ปั๊มนม'+(e.side?` (${sideMap[e.side]})`:'')+` — ${ozStr(e.amount||0)} ออนซ์`+(dur!=null?` — ${dur} นาที`:'');
   }
   if(e.type==='vaccine'){
     return 'ฉีดวัคซีน: '+e.vaccineName+(e.dose?` (เข็มที่ ${e.dose})`:'')+(e.location?` — ${e.location}`:'');
@@ -1162,17 +1194,30 @@ function last7Days(){
   return days;
 }
 
+function avgDurationForDay(d, kind){
+  const durs = entries
+    .filter(e=> e.type==='feed' && e.feedKind===kind && e.endTime && isSameDay(e.time, d))
+    .map(e=> durationMin(e))
+    .filter(v=> v!=null && v>0);
+  if(durs.length===0) return null;
+  return Math.round(durs.reduce((a,b)=>a+b,0) / durs.length);
+}
+
 function renderCharts(){
   const days = last7Days();
   const labels = days.map(d=> d.getDate()+' '+THAI_MONTHS[d.getMonth()]);
   const feedData = days.map(d => mlToOzNum(entries.filter(e=>e.type==='feed' && e.amount && isSameDay(e.time,d)).reduce((s,e)=>s+e.amount,0)));
   const diaperData = days.map(d => entries.filter(e=>e.type==='diaper' && isSameDay(e.time,d)).length);
+  const breastDurData = days.map(d => avgDurationForDay(d, 'breast'));
+  const bottleDurData = days.map(d => avgDurationForDay(d, 'bottle'));
 
   const feedCtx = document.getElementById('chartFeed').getContext('2d');
   const diaperCtx = document.getElementById('chartDiaper').getContext('2d');
+  const durationCtx = document.getElementById('chartDuration').getContext('2d');
 
   if(feedChart) feedChart.destroy();
   if(diaperChart) diaperChart.destroy();
+  if(durationChart) durationChart.destroy();
 
   feedChart = new Chart(feedCtx, {
     type:'bar',
@@ -1183,6 +1228,14 @@ function renderCharts(){
     type:'bar',
     data:{ labels, datasets:[{ label:'ครั้ง', data:diaperData, backgroundColor:'#e3ac5c', borderRadius:6 }] },
     options:{ plugins:{legend:{display:false}}, scales:{ y:{ beginAtZero:true, ticks:{stepSize:1}, grid:{color:'#eee'} }, x:{grid:{display:false}} } }
+  });
+  durationChart = new Chart(durationCtx, {
+    type:'bar',
+    data:{ labels, datasets:[
+      { label:'เข้าเต้า', data:breastDurData, backgroundColor:'#6b9080', borderRadius:6 },
+      { label:'ขวดนม', data:bottleDurData, backgroundColor:'#e29b96', borderRadius:6 }
+    ] },
+    options:{ plugins:{legend:{display:true, position:'top', labels:{boxWidth:12, font:{size:11}}}}, scales:{ y:{ beginAtZero:true, grid:{color:'#eee'} }, x:{grid:{display:false}} } }
   });
 }
 
@@ -1274,6 +1327,7 @@ document.getElementById('exportBtn').addEventListener('click', ()=>{
       'ประเภทกิจกรรม': ({diaper:'เปลี่ยนผ้าอ้อม', bath:'อาบน้ำ', feed:'กินนม', pump:'ปั๊มนม', vaccine:'วัคซีน', symptom:'อาการ'})[e.type],
       'รายละเอียด': typeLabel(e),
       'ปริมาณ (ออนซ์)': e.amount!=null ? ozStr(e.amount) : '',
+      'ระยะเวลา (นาที)': durationMin(e)!=null ? durationMin(e) : '',
       'บันทึกเพิ่มเติม': e.note || '',
       'รูปแนบ': e.photoURL ? e.photoURL : (e.photoData ? 'มีรูป (เก็บในเครื่องนี้เท่านั้น ดูในแอป)' : '')
     };
@@ -1315,7 +1369,7 @@ document.getElementById('exportBtn').addEventListener('click', ()=>{
 
   const wb = XLSX.utils.book_new();
   const ws1 = XLSX.utils.json_to_sheet(rows);
-  ws1['!cols'] = [{wch:12},{wch:8},{wch:16},{wch:28},{wch:14},{wch:30},{wch:40}];
+  ws1['!cols'] = [{wch:12},{wch:8},{wch:16},{wch:28},{wch:14},{wch:14},{wch:30},{wch:40}];
   XLSX.utils.book_append_sheet(wb, ws1, 'บันทึกกิจกรรม');
   const ws2 = XLSX.utils.json_to_sheet(summaryRows);
   ws2['!cols'] = [{wch:12},{wch:14},{wch:16},{wch:20},{wch:16},{wch:16}];
