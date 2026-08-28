@@ -797,6 +797,12 @@ document.querySelectorAll('.seg').forEach(seg=>{
 
 function segValue(id){ const sel = document.querySelector('#'+id+' button.sel'); return sel ? sel.dataset.v : null; }
 function segValues(id){ return [...document.querySelectorAll('#'+id+' button.sel')].map(b=>b.dataset.v); }
+function withTimeout(promise, ms, label){
+  return Promise.race([
+    promise,
+    new Promise((_, reject)=> setTimeout(()=> reject(new Error((label||'การเชื่อมต่อ')+'หมดเวลา ลองใหม่อีกครั้ง')), ms))
+  ]);
+}
 
 function compressImage(file, maxDim, quality){
   return new Promise((resolve, reject)=>{
@@ -923,24 +929,9 @@ async function saveEntry(type){
   if(syncEnabled){
     try{
       if(pendingPhotos[type]){
-        let uploaded = false;
-        if(fbStorage){
-          try{
-            const path = `littleLogFamilies/${document.getElementById('fb-family').value.trim() || 'default'}/photos/${entry.id}.jpg`;
-            const ref = fbStorage.ref().child(path);
-            await ref.putString(pendingPhotos[type], 'data_url');
-            entry.photoURL = await ref.getDownloadURL();
-            uploaded = true;
-          }catch(photoErr){
-            // Storage unavailable (e.g. Blaze plan not enabled) — fall back to embedding the
-            // compressed photo directly in the Firestore document instead of failing silently.
-          }
-        }
-        if(!uploaded){
-          entry.photoData = pendingPhotos[type];
-        }
+        entry.photoData = pendingPhotos[type];
       }
-      await fbCollectionRef.doc(entry.id).set(entry);
+      await withTimeout(fbCollectionRef.doc(entry.id).set(entry), 10000, 'บันทึกขึ้นคลาวด์');
     }
     catch(e){ showToast('บันทึกขึ้นคลาวด์ไม่สำเร็จ: '+e.message); return; }
   } else {
