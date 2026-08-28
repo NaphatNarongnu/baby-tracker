@@ -177,6 +177,11 @@
     opacity:.5; padding:2px 4px;
   }
   .t-del:hover{opacity:1; color:var(--rose-deep);}
+  .t-edit{
+    background:none; border:none; color:var(--ink-soft); cursor:pointer; font-size:15px;
+    opacity:.5; padding:2px 4px;
+  }
+  .t-edit:hover{opacity:1; color:var(--teal-deep);}
   .empty-day{padding:36px 10px; text-align:center; color:var(--ink-soft);}
   .empty-day .ic{font-size:30px; display:block; margin-bottom:8px;}
   .chart-grid{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
@@ -612,6 +617,7 @@ const SYNC_CONFIG_KEY = 'little-log-sync-config';
 let entries = [];
 let selectedDate = new Date();
 let activePanel = null;
+let editingId = null;
 let feedChart = null, diaperChart = null;
 let syncEnabled = false;
 let fbCollectionRef = null;
@@ -774,6 +780,13 @@ function openPanel(type){
 function closePanels(){
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('open'));
   document.querySelectorAll('.quick-btn').forEach(b=>b.classList.remove('active'));
+  ENTRY_TYPES.forEach(type=>{
+    const btn = document.querySelector(`#panel-${type} .btn-primary`);
+    if(btn) btn.textContent = 'บันทึก';
+    const title = document.querySelector(`#panel-${type} h3`);
+    if(title && title.dataset.orig) title.textContent = title.dataset.orig;
+  });
+  editingId = null;
   activePanel = null;
 }
 
@@ -797,6 +810,60 @@ document.querySelectorAll('.seg').forEach(seg=>{
 
 function segValue(id){ const sel = document.querySelector('#'+id+' button.sel'); return sel ? sel.dataset.v : null; }
 function segValues(id){ return [...document.querySelectorAll('#'+id+' button.sel')].map(b=>b.dataset.v); }
+function setSeg(id, value){
+  document.querySelectorAll('#'+id+' button').forEach(b=> b.classList.toggle('sel', b.dataset.v===value));
+}
+function setSegMulti(id, values){
+  const set = new Set(values||[]);
+  document.querySelectorAll('#'+id+' button').forEach(b=> b.classList.toggle('sel', set.has(b.dataset.v)));
+}
+
+function editEntry(id){
+  const e = entries.find(x=>x.id===id);
+  if(!e) return;
+  openPanel(e.type);
+  document.getElementById(e.type+'-time').value = fmtTime(e.time);
+
+  if(e.type==='diaper'){
+    setSeg('diaper-kind', e.diaperKind);
+    document.getElementById('diaper-note').value = e.note||'';
+  } else if(e.type==='bath'){
+    document.getElementById('bath-note').value = e.note||'';
+  } else if(e.type==='feed'){
+    setSeg('feed-kind', e.feedKind);
+    document.getElementById('feed-amount').value = e.amount!=null ? ozStr(e.amount) : '';
+    document.getElementById('feed-note').value = e.note||'';
+  } else if(e.type==='pump'){
+    document.getElementById('pump-amount').value = ozStr(e.amount||0);
+    setSeg('pump-side', e.side);
+    document.getElementById('pump-note').value = e.note||'';
+  } else if(e.type==='vaccine'){
+    document.getElementById('vaccine-name').value = e.vaccineName||'';
+    document.getElementById('vaccine-dose').value = e.dose!=null ? e.dose : '';
+    document.getElementById('vaccine-location').value = e.location||'';
+    document.getElementById('vaccine-note').value = e.note||'';
+  } else if(e.type==='symptom'){
+    setSegMulti('symptom-tags', e.symptoms);
+    setSeg('symptom-severity', e.severity);
+    document.getElementById('symptom-temp').value = e.temp!=null ? e.temp : '';
+    document.getElementById('symptom-note').value = e.note||'';
+  }
+
+  const src = photoSrc(e);
+  if(src){
+    pendingPhotos[e.type] = src;
+    setPhotoPreview(e.type, src);
+  }
+
+  editingId = id;
+  const btn = document.querySelector(`#panel-${e.type} .btn-primary`);
+  if(btn) btn.textContent = 'บันทึกการแก้ไข';
+  const title = document.querySelector(`#panel-${e.type} h3`);
+  if(title){
+    if(!title.dataset.orig) title.dataset.orig = title.textContent;
+    title.textContent = title.dataset.orig + ' (แก้ไข)';
+  }
+}
 function withTimeout(promise, ms, label){
   return Promise.race([
     promise,
@@ -892,7 +959,8 @@ async function saveEntry(type){
   const timeVal = document.getElementById(type+'-time').value;
   if(!timeVal){ showToast('กรุณาระบุเวลา'); return; }
   const iso = timeToISO(timeVal, selectedDate);
-  const entry = { id: Date.now().toString(36)+Math.random().toString(36).slice(2,7), type, time: iso };
+  const isEditing = !!editingId;
+  const entry = { id: editingId || (Date.now().toString(36)+Math.random().toString(36).slice(2,7)), type, time: iso };
 
   if(type==='diaper'){
     entry.diaperKind = segValue('diaper-kind');
@@ -936,7 +1004,11 @@ async function saveEntry(type){
     catch(e){ showToast('บันทึกขึ้นคลาวด์ไม่สำเร็จ: '+e.message); return; }
   } else {
     if(pendingPhotos[type]) entry.photoData = pendingPhotos[type];
-    entries.push(entry);
+    if(isEditing){
+      entries = entries.map(en=> en.id===entry.id ? entry : en);
+    } else {
+      entries.push(entry);
+    }
     await persist();
   }
   clearPhotoPreview(type);
@@ -946,7 +1018,7 @@ async function saveEntry(type){
   });
   document.querySelectorAll('#symptom-tags button.sel').forEach(b=>b.classList.remove('sel'));
   closePanels();
-  showToast('บันทึกแล้ว ✓');
+  showToast(isEditing ? 'แก้ไขแล้ว ✓' : 'บันทึกแล้ว ✓');
   render();
 }
 
@@ -1048,6 +1120,7 @@ function renderVaccineHistory(){
         <div class="t-meta">${[e.location, e.note].filter(Boolean).map(escapeHtml).join(' · ')}</div>
       </div>
       ${photoSrc(e) ? `<img class="t-photo" src="${photoSrc(e)}" onclick="openLightbox(this.src)">` : ''}
+      <button class="t-edit" title="แก้ไข" onclick="editEntry('${e.id}')">✎</button>
       <button class="t-del" title="ลบ" onclick="deleteEntry('${e.id}')">✕</button>
     </div>`;
   }).join('');
@@ -1069,6 +1142,7 @@ function renderTimeline(){
         ${e.note ? `<div class="t-meta">${escapeHtml(e.note)}</div>` : ''}
       </div>
       ${photoSrc(e) ? `<img class="t-photo" src="${photoSrc(e)}" onclick="openLightbox(this.src)">` : ''}
+      <button class="t-edit" title="แก้ไข" onclick="editEntry('${e.id}')">✎</button>
       <button class="t-del" title="ลบ" onclick="deleteEntry('${e.id}')">✕</button>
     </div>
   `).join('');
